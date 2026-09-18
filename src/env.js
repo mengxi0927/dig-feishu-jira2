@@ -34,12 +34,15 @@ export function getConfig() {
     feishuWikiNodeToken: process.env.FEISHU_WIKI_NODE_TOKEN || "",
     feishuAppToken: process.env.FEISHU_APP_TOKEN || "",
     feishuTableId: process.env.FEISHU_TABLE_ID || "",
+    feishuDailyTableId: process.env.FEISHU_DAILY_TABLE_ID || "",
     host: process.env.HOST || "127.0.0.1",
     port: Number(process.env.PORT || 8787),
     timezoneOffset: process.env.TIMEZONE_OFFSET || "+08:00",
     stateFile: path.resolve(process.cwd(), process.env.STATE_FILE || "./data/sync-state.json"),
     strictFieldCheck: booleanValue(process.env.STRICT_FIELD_CHECK, true),
+    strictDailyGovernance: booleanValue(process.env.STRICT_DAILY_GOVERNANCE, true),
     deleteMissing: booleanValue(process.env.SYNC_DELETE_MISSING, false),
+    dailyDeleteMissing: booleanValue(process.env.SYNC_DAILY_DELETE_MISSING, true),
   };
 }
 

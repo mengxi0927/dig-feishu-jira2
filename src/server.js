@@ -24,7 +24,13 @@ const server = http.createServer(async (request, response) => {
       return send(response, 200, {
         ok: true,
         jiraConfigured: Boolean(config.jiraUsername && config.jiraPassword),
-        feishuConfigured: Boolean(config.feishuAppId && config.feishuAppSecret && config.feishuTableId),
+        feishuConfigured: Boolean(
+          config.feishuAppId
+          && config.feishuAppSecret
+          && config.feishuTableId
+          && config.feishuDailyTableId,
+        ),
+        dailyTableConfigured: Boolean(config.feishuDailyTableId),
       });
     }
     if (request.method === "GET" && url.pathname === "/api/preview") {
