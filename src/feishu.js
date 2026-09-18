@@ -73,6 +73,23 @@ export class FeishuClient {
     return this.fieldMap;
   }
 
+  async listRecords() {
+    const appToken = await this.resolveAppToken();
+    const records = [];
+    let pageToken = "";
+    do {
+      const query = new URLSearchParams({ page_size: "500" });
+      if (pageToken) query.set("page_token", pageToken);
+      const response = await this.request(
+        `/bitable/v1/apps/${appToken}/tables/${this.tableId}/records?${query.toString()}`,
+      );
+      const data = assertFeishuSuccess(response, "读取飞书记录");
+      records.push(...(data?.items || []));
+      pageToken = data?.has_more ? data.page_token || "" : "";
+    } while (pageToken);
+    return records;
+  }
+
   dateToTimestamp(value, fieldName, allFields) {
     if (typeof value === "number") return value;
     if (!value) return value;

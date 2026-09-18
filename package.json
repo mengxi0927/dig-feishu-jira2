@@ -10,6 +10,8 @@
     "start": "node src/server.js",
     "preview": "node src/cli.js preview",
     "sync": "node src/cli.js sync",
+    "worklog:preview": "node src/worklog-cli.js preview",
+    "worklog:sync": "node src/worklog-cli.js sync",
     "test": "node --test"
   }
 }

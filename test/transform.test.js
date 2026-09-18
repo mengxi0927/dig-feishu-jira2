@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { transformPlans } from "../src/transform.js";
+import { dailySourceKey, transformDailyPlans, transformPlans } from "../src/transform.js";
 import { validateDate } from "../src/service.js";
 
 const fakeJira = {
@@ -58,4 +58,84 @@ test("validates calendar dates", () => {
   assert.equal(validateDate("2026-09-17"), "2026-09-17");
   assert.throws(() => validateDate("2026-02-30"), /有效日期/);
   assert.throws(() => validateDate("17-09-2026"), /YYYY-MM-DD/);
+});
+
+test("aggregates daily plans by date, project key and assignee name", async () => {
+  const daily = await transformDailyPlans([
+    {
+      allocationId: 100,
+      assignee: "assignee1",
+      day: "2026-09-17",
+      timePlannedSeconds: 3600,
+      secondsPerDay: 28800,
+      planItemInfo: { projectKey: "DIG", key: "DIG-1" },
+    },
+    {
+      allocationId: 101,
+      assignee: "assignee1",
+      day: "2026-09-17",
+      timePlannedSeconds: 5400,
+      planItemInfo: { projectKey: "DIG", key: "DIG-2" },
+    },
+    {
+      allocationId: 100,
+      assignee: "assignee1",
+      day: "2026-09-17",
+      timePlannedSeconds: 3600,
+      planItemInfo: { projectKey: "DIG", key: "DIG-1" },
+    },
+    {
+      allocationId: 102,
+      assignee: "creator1",
+      day: "2026-09-17",
+      secondsPerDay: 7200,
+      planItemInfo: { key: "DIG-3" },
+    },
+  ], fakeJira);
+
+  assert.equal(daily.errors.length, 0);
+  assert.equal(daily.rows.length, 2);
+  assert.deepEqual(
+    daily.rows.find((row) => row.fields["姓名"] === "执行人"),
+    {
+      sourceKey: dailySourceKey("2026-09-17", "DIG", "执行人"),
+      sourceDay: "2026-09-17",
+      fields: {
+        "日期": "2026-09-17",
+        "姓名": "执行人",
+        "项目号": "DIG",
+        "工时": 2.5,
+      },
+    },
+  );
+  assert.equal(daily.rows.find((row) => row.fields["姓名"] === "派工人").fields["工时"], 2);
+  assert.deepEqual(daily.summary, {
+    inputPlans: 4,
+    acceptedPlans: 3,
+    duplicatePlans: 1,
+    rejectedPlans: 0,
+    outputRows: 2,
+    inputHours: 4.5,
+    outputHours: 4.5,
+  });
+});
+
+test("reports invalid daily primary-key and hours data", async () => {
+  const daily = await transformDailyPlans([
+    {
+      allocationId: 200,
+      assignee: "assignee1",
+      day: "2026-02-30",
+      timePlannedSeconds: -1,
+      planItemInfo: {},
+    },
+  ], fakeJira);
+
+  assert.equal(daily.rows.length, 0);
+  assert.deepEqual(daily.errors[0].codes, [
+    "INVALID_DAY",
+    "MISSING_PROJECT_KEY",
+    "INVALID_PLANNED_SECONDS",
+  ]);
+  assert.equal(daily.summary.rejectedPlans, 1);
 });

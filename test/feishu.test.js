@@ -25,3 +25,25 @@ test("serializes date, time, number and text fields using Feishu field types", (
   assert.equal(result["Issue key"], "DIG-1");
   assert.equal("Not in table" in result, false);
 });
+
+test("serializes the governed daily table fields", () => {
+  const client = new FeishuClient({ timezoneOffset: "+08:00" });
+  client.fieldMap = new Map([
+    ["日期", { type: 5 }],
+    ["姓名", { type: 1 }],
+    ["项目号", { type: 1 }],
+    ["工时", { type: 2 }],
+  ]);
+
+  const result = client.serializeFields({
+    "日期": "2026-09-17",
+    "姓名": "执行人",
+    "项目号": "DIG",
+    "工时": 2.5,
+  });
+
+  assert.equal(result["日期"], Date.parse("2026-09-17T00:00:00+08:00"));
+  assert.equal(result["姓名"], "执行人");
+  assert.equal(result["项目号"], "DIG");
+  assert.equal(result["工时"], 2.5);
+});

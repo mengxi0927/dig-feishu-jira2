@@ -1,22 +1,30 @@
-# Jira 派工同步到飞书多维表格
+# Jira 派工与报工同步到飞书多维表格
 
-本地 Node.js 服务。它按指定日期读取 Tempo Planning 派工数据，转换成 Excel 中定义的 23 个字段，然后批量新增或更新到飞书多维表格。
+本地 Node.js 服务。它同步 Tempo Planning 派工和 Jira Worklog 报工数据：
+
+1. 将每条 Tempo 派工日记录转换成 Excel 中定义的 23 个字段，写入派工基础表；
+2. 对同一批数据按“日期 + 项目号 + 姓名”聚合，将某人某日在某项目上的派工工时写入日粒度治理表。
+3. 使用 Jira 标准 REST API 拉取 Worklog 报工明细，转换成中文语义字段后写入报工表。
 
 ## 已采用的目标
 
 - Jira：`POST /rest/tempo-planning/1/plan/search`
 - 飞书多维表格 app token：`C8rxwJXuYimZsKkY0RKcjPxpnCf`
-- 飞书数据表：`tblaButiER9WUiIJ`
-- 唯一来源键：`allocationId + day`
+- 派工基础表：`tblaButiER9WUiIJ`
+- 日粒度治理表：`tblwy3hWdQIv1JhL`
+- 报工明细表：`tblZjQL48vL9oOAZ`
+- 基础表唯一来源键：`allocationId + day`
+- 日粒度表联合主键：`日期 + 项目号 + 姓名`
+- 报工表唯一来源键：`Jira Worklog ID`
 
-服务不会在飞书表中增加额外字段。飞书 `record_id` 映射保存在本地 `data/sync-state.json`，所以重复同步同一天时会更新已有记录。
+服务不会在飞书表中增加额外字段。各目标表的飞书 `record_id` 映射分别保存在本地 `data/sync-state.json`，所以重复同步同一日期范围时会更新已有记录。
 
 ## 环境要求
 
 - Node.js 18 或更高版本
 - Jira/Tempo 只读账号
 - 飞书自建应用，并允许访问目标 Wiki/多维表格
-- 飞书应用具备读取多维表格字段、读取 Wiki 节点、批量新增记录、批量更新记录权限
+- 飞书应用具备读取多维表格字段、批量新增记录、批量更新记录、批量删除记录权限；仅使用 Wiki 节点 token 时还需读取 Wiki 节点权限
 
 当前配置已直接使用 `FEISHU_APP_TOKEN`，不需要 Wiki 读取权限。
 
@@ -33,6 +41,10 @@ JIRA_USERNAME=你的 Jira 用户名
 JIRA_PASSWORD=你的 Jira 密码
 FEISHU_APP_ID=飞书应用 App ID
 FEISHU_APP_SECRET=飞书应用 App Secret
+FEISHU_APP_TOKEN=C8rxwJXuYimZsKkY0RKcjPxpnCf
+FEISHU_TABLE_ID=tblaButiER9WUiIJ
+FEISHU_DAILY_TABLE_ID=tblwy3hWdQIv1JhL
+FEISHU_WORKLOG_TABLE_ID=tblZjQL48vL9oOAZ
 ```
 
 不要把 `.env` 提交到代码仓库。
@@ -45,13 +57,24 @@ FEISHU_APP_SECRET=飞书应用 App Secret
 npm run preview -- --date 2026-09-17
 ```
 
+结果中的 `data` 是 23 字段基础数据；`daily.data` 是治理后的四字段数据。建议先确认：
+
+```json
+{
+  "日期": "2026-09-17",
+  "姓名": "张三",
+  "项目号": "D5GP9FG164",
+  "工时": 8
+}
+```
+
 ## 执行一次同步
 
 ```bash
 npm run sync -- --date 2026-09-17
 ```
 
-第一次运行会新增记录；再次同步同一天时，会利用本地状态中的飞书 `record_id` 更新记录。
+一次同步会先写基础表，再写日粒度表。第一次运行会新增记录；再次同步同一天时，会利用本地状态中的飞书 `record_id` 更新记录。
 
 默认不会删除飞书记录。如果确认需要让飞书严格镜像 Jira，可在 `.env` 中设置：
 
@@ -60,6 +83,68 @@ SYNC_DELETE_MISSING=true
 ```
 
 开启后，服务仅删除“之前由本服务同步到该日期、现在 Jira 已不存在”的记录，不会扫描或删除其他手工记录。
+
+日粒度表默认设置 `SYNC_DAILY_DELETE_MISSING=true`。这是因为姓名、项目号或派工归属变化后，联合主键也会变化；服务会删除本地状态中同一天的旧联合主键记录。删除范围仍仅限本服务曾经创建的记录。如需只增不删，可改成：
+
+```text
+SYNC_DAILY_DELETE_MISSING=false
+```
+
+日粒度治理默认使用严格模式：只要源数据缺少日期、项目号、人员或有效工时，就在两张表写入前停止。可先通过 `preview` 查看 `daily.errors`。不建议关闭；确需跳过异常记录继续同步时，可配置：
+
+```text
+STRICT_DAILY_GOVERNANCE=false
+```
+
+## Jira Worklog 报工同步
+
+报工链路只使用 Jira 标准接口：
+
+- `GET /rest/api/2/field`：识别 Epic 字段；
+- `GET /rest/api/2/search`：通过 `worklogDate` JQL 分页查找相关 Issue；
+- `GET /rest/api/2/issue/{issueKey}/worklog`：当搜索结果中的 Worklog 未完整展开时分页补取。
+
+先预览日期范围：
+
+```bash
+npm run worklog:preview -- --from 2026-09-01 --to 2026-09-18
+```
+
+确认后同步：
+
+```bash
+npm run worklog:sync -- --from 2026-09-01 --to 2026-09-18
+```
+
+也可以只处理一天：
+
+```bash
+npm run worklog:sync -- --date 2026-09-18
+```
+
+每条 Worklog 使用 `Jira Worklog ID` 作为稳定来源键。同步前会读取目标表，利用已有的 `Jira Worklog ID` 恢复本地映射，因此迁移运行环境后也能避免重复新增。默认情况下，指定日期范围会严格镜像 Jira：已由本服务识别、但已从 Jira 删除或移出日期范围的 Worklog 会从飞书删除。
+
+标准接口可以直接提供问题、项目、用户、日期、工时、描述、组件、版本、父问题、报告人、估算和 Worklog ID。以下 Tempo 专属字段不在 Jira 标准 Worklog 响应中，保持空值：
+
+- 周期；
+- Account Key/Name/Lead/Category/Customer；
+- Location Name；
+- Account Approval Status；
+- 外部工时数。
+
+`活动名称` 使用 Jira 项目名称作为稳定替代；`有效工时数` 在标准接口没有 Tempo billable seconds 时等于实际报工工时。
+
+可选配置：
+
+```text
+STRICT_WORKLOG_GOVERNANCE=true
+WORKLOG_SYNC_DELETE_MISSING=true
+WORKLOG_JQL_EXTRA=
+WORKLOG_CONCURRENCY=6
+WORKLOG_PAGE_SIZE=100
+```
+
+目标表的“工时”和“有效工时数”应配置为数字字段并保留需要的小数位；Jira Worklog 可能出现 `4.5` 小时等非整数工时。
 
 ## 启动 HTTP 服务
 
@@ -88,7 +173,33 @@ curl -X POST \
   http://127.0.0.1:8787/api/sync
 ```
 
+Worklog 日期范围预览与同步：
+
+```bash
+curl 'http://127.0.0.1:8787/api/worklogs/preview?from=2026-09-01&to=2026-09-18'
+
+curl -X POST \
+  -H 'Content-Type: application/json' \
+  -d '{"from":"2026-09-01","to":"2026-09-18"}' \
+  http://127.0.0.1:8787/api/worklogs/sync
+```
+
 ## 字段映射
+
+### 日粒度治理表
+
+请在 `tblwy3hWdQIv1JhL` 中准备以下字段，字段名称必须完全一致：
+
+| 飞书字段 | 建议字段类型 | Jira/Tempo 来源 |
+|---|---|---|
+| 日期 | 日期 | `day` |
+| 姓名 | 单行文本 | `assignee` 经 Jira 用户接口补全的显示名 |
+| 项目号 | 单行文本 | `planItemInfo.projectKey`；缺失时从 Issue Key 提取 |
+| 工时 | 数字 | 同一联合主键下 `timePlannedSeconds` 求和后除以 3600 |
+
+Tempo 搜索接口已经按日期展开，因此日工时优先使用该日的 `timePlannedSeconds`；只有旧版响应没有该字段时才回退到 `secondsPerDay`。同一个 `allocationId + day` 若在接口中重复出现只计一次，不同 Issue/派工记录落在同一联合主键时会合并求和。
+
+### 派工基础表
 
 | 飞书字段 | Jira/Tempo 来源 |
 |---|---|
@@ -115,6 +226,6 @@ Tempo 的搜索响应按日期展开。服务先查询目标日有哪些派工�
 
 - 服务默认只监听 `127.0.0.1`，不会暴露到局域网。
 - 密码和 App Secret 仅从 `.env` 读取，不会写入同步状态。
-- 写入前会读取飞书字段定义。默认要求 Excel 中的 23 个字段全部存在，否则停止写入。
+- 写入前会读取飞书字段定义。默认要求基础表的 23 个字段、日粒度表的 4 个字段和报工表的 35 个字段全部存在，否则停止对应链路的写入。
 - 飞书日期字段按照 `TIMEZONE_OFFSET=+08:00` 转成毫秒时间戳。
-- 如果删除或迁移 `data/sync-state.json`，服务无法识别以前创建的飞书记录，再次同步可能产生重复数据。
+- 派工链路依赖 `data/sync-state.json`，部署时应将 `data/` 作为持久化目录并定期备份。报工链路还能通过目标表中的 `Jira Worklog ID` 自动恢复映射。
