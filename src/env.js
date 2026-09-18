@@ -35,6 +35,7 @@ export function getConfig() {
     feishuAppToken: process.env.FEISHU_APP_TOKEN || "",
     feishuTableId: process.env.FEISHU_TABLE_ID || "",
     feishuDailyTableId: process.env.FEISHU_DAILY_TABLE_ID || "",
+    feishuWorklogTableId: process.env.FEISHU_WORKLOG_TABLE_ID || "tblZjQL48vL9oOAZ",
     host: process.env.HOST || "127.0.0.1",
     port: Number(process.env.PORT || 8787),
     timezoneOffset: process.env.TIMEZONE_OFFSET || "+08:00",
@@ -43,6 +44,11 @@ export function getConfig() {
     strictDailyGovernance: booleanValue(process.env.STRICT_DAILY_GOVERNANCE, true),
     deleteMissing: booleanValue(process.env.SYNC_DELETE_MISSING, false),
     dailyDeleteMissing: booleanValue(process.env.SYNC_DAILY_DELETE_MISSING, true),
+    strictWorklogGovernance: booleanValue(process.env.STRICT_WORKLOG_GOVERNANCE, true),
+    worklogDeleteMissing: booleanValue(process.env.WORKLOG_SYNC_DELETE_MISSING, true),
+    worklogJqlExtra: process.env.WORKLOG_JQL_EXTRA || "",
+    worklogConcurrency: Number(process.env.WORKLOG_CONCURRENCY || 6),
+    worklogPageSize: Number(process.env.WORKLOG_PAGE_SIZE || 100),
   };
 }
 
