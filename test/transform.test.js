@@ -18,6 +18,8 @@ test("maps Tempo plan including the four additional Feishu fields", async () => 
     {
       allocationId: 100,
       planItemType: "ISSUE",
+      dateCreated: "2026-09-15",
+      dateUpdated: "2026-09-16",
       assignee: "assignee1",
       day: "2026-09-17",
       planCreator: "creator1",
@@ -46,6 +48,9 @@ test("maps Tempo plan including the four additional Feishu fields", async () => 
   assert.equal(rows[0].fields.Source, "Jira Tempo Planning");
   assert.equal(rows[0].fields["Jira Tempo PlanningIssue URL"], "https://jira.example/browse/DIG-1");
   assert.equal(rows[0].fields["Jira IssuePlan item type"], "ISSUE");
+  assert.equal(rows[0].fields.allocationId, "100");
+  assert.equal(rows[0].fields.dateCreated, "2026-09-15");
+  assert.equal(rows[0].fields.dateUpdated, "2026-09-16");
 });
 
 test("does not invent item types or issue URLs for project plans", async () => {

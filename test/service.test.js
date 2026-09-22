@@ -265,11 +265,14 @@ test(`sync writes both tables using daily hours field ${hoursField}`, async () =
     assert.equal(result.created, 1);
     assert.equal(result.daily.created, 1);
     assert.deepEqual(writes.map((write) => write.tableId), ["raw-table", "daily-table"]);
+    assert.equal(writes[0].records[0].fields.allocationId, "300");
+    assert.equal(writes[0].records[0].fields["派工状态"], "新增");
     assert.deepEqual(writes[1].records[0].fields, {
       "日期": Date.parse("2026-09-17T00:00:00+08:00"),
       "姓名": "执行人",
       "项目号": "DIG",
       [hoursField]: 1,
+      allocationId: "300",
     });
 
     const state = JSON.parse(await fs.readFile(path.join(temporaryDirectory, "sync-state.json"), "utf8"));
@@ -281,3 +284,17 @@ test(`sync writes both tables using daily hours field ${hoursField}`, async () =
   }
 });
 }
+
+test("legacy assignment metadata keeps status on retry and marks actual content changes", async () => {
+  const feishu = fakeFeishu(["allocationId", "派工状态", "工时"]);
+  const table = { records: { "300|2026-09-21": { recordId: "existing", day: "2026-09-21" } } };
+  const run = hours => syncTableRows({ feishu, rows: [{ sourceKey: "300|2026-09-21", sourceDay: "2026-09-21",
+    fields: { allocationId: "300", "工时": hours } }], expectedFields: ["allocationId", "派工状态", "工时"],
+    state: { table: () => table }, date: "2026-09-21", strictFieldCheck: true, trackAssignmentChanges: true });
+  await run(5);
+  await run(5);
+  await run(8);
+  await run(8);
+  assert.deepEqual(feishu.updated.map(row => row.fields["派工状态"]), ["新增", "新增", "修改", "修改"]);
+  assert.equal(feishu.created.length, 0);
+});

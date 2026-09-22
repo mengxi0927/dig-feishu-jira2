@@ -1,4 +1,5 @@
 import { FeishuClient } from "./feishu.js";
+import { createHash } from "node:crypto";
 import { requireConfig } from "./env.js";
 import { JiraClient } from "./jira.js";
 import { StateStore } from "./state.js";
@@ -49,6 +50,7 @@ export async function syncTableRows({
   deleteMissing,
   strictFieldCheck,
   tableLabel,
+  trackAssignmentChanges = false,
 }) {
   const missingFields = await validateTableFields(
     feishu,
@@ -65,11 +67,20 @@ export async function syncTableRows({
 
   for (const row of rows) {
     sourceKeys.add(row.sourceKey);
-    const fields = feishu.serializeFields(row.fields);
     const known = tableState.records[row.sourceKey];
     const recordId = typeof known === "string" ? known : known?.recordId;
-    if (recordId) updates.push({ ...row, recordId, fields });
-    else creates.push({ ...row, fields });
+    const provenance = {};
+    const outputFields = { ...row.fields };
+    if (trackAssignmentChanges) {
+      provenance.assignmentFingerprint = createHash("sha256").update(JSON.stringify(row.fields)).digest("hex");
+      provenance.assignmentStatus = known?.assignmentFingerprint
+        ? (known.assignmentFingerprint === provenance.assignmentFingerprint ? known.assignmentStatus : "修改")
+        : "新增";
+      outputFields["派工状态"] = provenance.assignmentStatus;
+    }
+    const fields = feishu.serializeFields(outputFields);
+    if (recordId) updates.push({ ...row, recordId, fields, provenance });
+    else creates.push({ ...row, fields, provenance });
   }
 
   if (updates.length) await feishu.batchUpdate(updates);
@@ -84,11 +95,12 @@ export async function syncTableRows({
     tableState.records[creates[index].sourceKey] = {
       recordId,
       day: creates[index].sourceDay,
+      ...creates[index].provenance,
     };
   }
 
   for (const row of updates) {
-    tableState.records[row.sourceKey] = { recordId: row.recordId, day: row.sourceDay };
+    tableState.records[row.sourceKey] = { recordId: row.recordId, day: row.sourceDay, ...row.provenance };
   }
 
   const deletions = [];
@@ -131,7 +143,7 @@ export function createSyncService(config) {
     validateDate(date);
     const plans = await jira.fetchPlanAllocationsForDate(date);
     const rows = await transformPlans(plans, jira);
-    const daily = await transformDailyPlans(plans, jira);
+    const daily = await transformDailyPlans(plans, jira, { includeAllocationIds: true });
     return {
       date,
       jiraRecords: plans.length,
@@ -201,6 +213,7 @@ export function createSyncService(config) {
       deleteMissing: config.deleteMissing,
       strictFieldCheck: config.strictFieldCheck,
       tableLabel: "派工基础表",
+      trackAssignmentChanges: true,
     });
     await state.save();
 

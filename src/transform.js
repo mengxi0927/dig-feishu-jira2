@@ -26,9 +26,13 @@ export const EXPECTED_FIELDS = [
   "Source",
   "Jira Tempo PlanningIssue URL",
   "Jira IssuePlan item type",
+  "dateCreated",
+  "dateUpdated",
+  "派工状态",
+  "allocationId",
 ];
 
-export const DAILY_EXPECTED_FIELDS = ["日期", "姓名", "项目号", "工时"];
+export const DAILY_EXPECTED_FIELDS = ["日期", "姓名", "项目号", "工时", "allocationId"];
 
 function hours(seconds) {
   if (seconds == null || Number.isNaN(Number(seconds))) return "";
@@ -147,6 +151,9 @@ export async function transformPlans(plans, jiraClient) {
         Source: "Jira Tempo Planning",
         "Jira Tempo PlanningIssue URL": issueUrl,
         "Jira IssuePlan item type": itemType,
+        dateCreated: plan.dateCreated || "",
+        dateUpdated: plan.dateUpdated || "",
+        allocationId: identifier(plan.allocationId),
       },
     });
   }
