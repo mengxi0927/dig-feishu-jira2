@@ -49,7 +49,7 @@ test("maps Tempo plan including the four additional Feishu fields", async () => 
   assert.equal(rows[0].fields["Jira Tempo PlanningIssue URL"], "https://jira.example/browse/DIG-1");
   assert.equal(rows[0].fields["Jira IssuePlan item type"], "ISSUE");
   assert.equal(rows[0].fields.allocationId, "100");
-  assert.equal(rows[0].fields["派工识别id"], "100|2026-09-17");
+  assert.equal(rows[0].fields["派工识别id"], "10020260917");
   assert.equal(rows[0].fields.dateCreated, "2026-09-15");
   assert.equal(rows[0].fields.dateUpdated, "2026-09-16");
 });

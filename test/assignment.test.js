@@ -22,6 +22,7 @@ test("source deltas handle increases, reductions, deletion and moves without cha
   for (const [hours, expected] of [[8, 3], [2, -3], [0, -5]]) {
     const after = await snap(hours ? [plan(1, "2026-08-01", hours)] : []);
     assert.equal(adjustmentRows(before, after, "2026-08-22", "2026-01-01", 1)[0].fields["补录工时（小时）"], expected);
+    assert.equal(adjustmentRows(before, after, "2026-08-22", "2026-01-01", 1)[0].fields["派工识别id"], "120260801");
   }
   assert.equal(adjustmentRows({}, before, "2026-08-22", "2026-01-01", 1)[0].fields["补录工时（小时）"], 5);
   const moved = await snap([plan(1, "2026-08-02", 5, "OTHER")]);
@@ -33,7 +34,7 @@ test("allocation metadata does not change existing aggregation or rounded hours"
   const plans = [plan(11, "2026-09-01", 1.25), plan(12, "2026-09-01", 3.5), plan(11, "2026-09-01", 1.25)];
   const old = await transformDailyPlans(plans, jiraBase);
   const enriched = await transformDailyPlans(plans, jiraBase, { includeAllocationIds: true });
-  assert.equal(enriched.rows[0].fields["派工识别id"], "11|2026-09-01,12|2026-09-01");
+  assert.equal(enriched.rows[0].fields["派工识别id"], "1120260901,1220260901");
   delete enriched.rows[0].fields["派工识别id"];
   assert.deepEqual(enriched, old);
 });
@@ -173,7 +174,7 @@ test("lost log create response recovers without duplicate event and normal delet
   assert.equal(f.tables.get("raw").records.length,count);
   const normal = f.tables.get("normal").records.find(r=>r.fields["日期"]==="2026-09-18");
   assert.equal(normal.fields["工时（小时）"],3);
-  assert.equal(normal.fields["派工识别id"],"3|2026-09-18");
+  assert.equal(normal.fields["派工识别id"],"320260918");
   assert.ok(f.calls.some(([from])=>from==="2026-01-01"));
 });
 

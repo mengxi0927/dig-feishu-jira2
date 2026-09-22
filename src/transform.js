@@ -35,6 +35,11 @@ export const EXPECTED_FIELDS = [
 
 export const DAILY_EXPECTED_FIELDS = ["日期", "姓名", "项目号", "工时", "派工识别id"];
 
+// Display provenance uses compact dates; internal source keys remain unchanged for state compatibility.
+export function assignmentRecognitionId(allocationId, date) {
+  return `${allocationId}${String(date).replaceAll("-", "")}`;
+}
+
 function hours(seconds) {
   if (seconds == null || Number.isNaN(Number(seconds))) return "";
   return Number(seconds) / 3600;
@@ -155,7 +160,7 @@ export async function transformPlans(plans, jiraClient) {
         dateCreated: plan.dateCreated || "",
         dateUpdated: plan.dateUpdated || "",
         allocationId: identifier(plan.allocationId),
-        "派工识别id": sourceKey,
+        "派工识别id": assignmentRecognitionId(plan.allocationId, plan.day),
       },
     });
   }
@@ -255,7 +260,7 @@ export async function transformDailyPlans(plans, jiraClient, { includeAllocation
         "姓名": group.assigneeName,
         "项目号": group.project,
         "工时": roundHours(group.seconds / 3600),
-        ...(includeAllocationIds ? { "派工识别id": [...group.allocationIds].sort().map(id => `${id}|${group.day}`).join(",") } : {}),
+        ...(includeAllocationIds ? { "派工识别id": [...group.allocationIds].sort().map(id => assignmentRecognitionId(id, group.day)).join(",") } : {}),
       },
     }))
     .sort((left, right) => (
