@@ -193,7 +193,9 @@ test("fetches Jira worklogs through standard APIs and filters by work date", asy
   }
 });
 
-test("restores the record mapping from Jira Worklog ID and updates instead of duplicating", async () => {
+for (const scenario of ["legacy", "hours-alias", "duplicate-target", "wrong-type", "moved-date"]) {
+test(`worklog sync handles ${scenario}`, async () => {
+  const hoursField = scenario === "legacy" ? "工时" : "工时（小时）";
   const originalFetch = global.fetch;
   const temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "jira-worklog-sync-"));
   const writes = [];
@@ -225,14 +227,14 @@ test("restores the record mapping from Jira Worklog ID and updates instead of du
       return response({ code: 0, tenant_access_token: "tenant-token" });
     }
     if (address.includes("/tables/worklog-table/fields?")) {
-      const numericFields = new Set(["工时", "有效工时数"]);
+      const numericFields = new Set([hoursField, "有效工时数"]);
       const dateFields = new Set(["工作日期", "Worklog 更新时间", "同步时间"]);
       return response({
         code: 0,
         data: {
-          items: WORKLOG_EXPECTED_FIELDS.map((fieldName) => ({
+          items: WORKLOG_EXPECTED_FIELDS.map((name) => name === "工时" ? hoursField : name).map((fieldName) => ({
             field_name: fieldName,
-            type: numericFields.has(fieldName) ? 2 : dateFields.has(fieldName) ? 5 : 1,
+            type: scenario === "wrong-type" && fieldName === hoursField ? 1 : numericFields.has(fieldName) ? 2 : dateFields.has(fieldName) ? 5 : 1,
           })),
           has_more: false,
         },
@@ -246,9 +248,9 @@ test("restores the record mapping from Jira Worklog ID and updates instead of du
             record_id: "existing-record",
             fields: {
               "Jira Worklog ID": "205123",
-              "工作日期": Date.parse("2026-09-16T00:00:00+08:00"),
+              "工作日期": Date.parse(`${scenario === "moved-date" ? "2026-09-15" : "2026-09-16"}T00:00:00+08:00`),
             },
-          }],
+          }, ...(scenario === "duplicate-target" ? [{ record_id: "duplicate-record", fields: { "Jira Worklog ID": "205123" } }] : [])],
           has_more: false,
         },
       });
@@ -271,8 +273,11 @@ test("restores the record mapping from Jira Worklog ID and updates instead of du
       feishuAppToken: "app-token",
       feishuWikiNodeToken: "",
       feishuWorklogTableId: "worklog-table",
+      feishuWorklogHoursField: hoursField,
       timezoneOffset: "+08:00",
       stateFile,
+      syncWriteEnabled: true,
+      syncAllowedHostname: os.hostname(),
       strictFieldCheck: true,
       strictWorklogGovernance: true,
       worklogDeleteMissing: true,
@@ -281,7 +286,13 @@ test("restores the record mapping from Jira Worklog ID and updates instead of du
       worklogPageSize: 100,
     });
 
-    const result = await service.sync("2026-09-16", "2026-09-16");
+    if (["duplicate-target", "wrong-type"].includes(scenario)) {
+      await assert.rejects(service.sync("2026-09-16", "2026-09-16"), scenario === "duplicate-target" ? /重复 Jira Worklog ID/ : /必须存在且类型为数字/);
+      assert.equal(writes.length, 0);
+      await assert.rejects(fs.access(stateFile));
+      return;
+    }
+    const result = await service.sync(scenario === "moved-date" ? "2026-09-15" : "2026-09-16", "2026-09-16");
 
     assert.equal(result.created, 0);
     assert.equal(result.updated, 1);
@@ -290,7 +301,7 @@ test("restores the record mapping from Jira Worklog ID and updates instead of du
     assert.equal(writes.length, 1);
     assert.equal(writes[0].records[0].record_id, "existing-record");
     assert.equal(writes[0].records[0].fields["Jira Worklog ID"], "205123");
-    assert.equal(writes[0].records[0].fields["工时"], 4.5);
+    assert.equal(writes[0].records[0].fields[hoursField], 4.5);
     assert.equal(
       writes[0].records[0].fields["工作日期"],
       Date.parse("2026-09-16T00:00:00+08:00"),
@@ -304,5 +315,23 @@ test("restores the record mapping from Jira Worklog ID and updates instead of du
   } finally {
     global.fetch = originalFetch;
     await fs.rm(temporaryDirectory, { recursive: true, force: true });
+  }
+});
+}
+
+test("conflicting source worklog IDs are governance errors", () => {
+  const first = sampleEntry();
+  const second = sampleEntry();
+  second.worklog.timeSpentSeconds = 3600;
+  const result = transformWorklogs([first, second]);
+  assert.equal(result.errors[0].codes[0], "CONFLICTING_WORKLOG_ID");
+});
+
+test("incomplete Jira pages fail instead of returning a partial snapshot", async () => {
+  const jira = new JiraClient({ baseUrl: "https://jira.example", username: "u", password: "p" });
+  for (const payload of [{}, { total: 2, issues: [], worklogs: [] }]) {
+    jira.request = async () => payload;
+    await assert.rejects(jira.searchIssues("", []), /停止同步/);
+    await assert.rejects(jira.fetchIssueWorklogs("DIG-1"), /停止同步/);
   }
 });

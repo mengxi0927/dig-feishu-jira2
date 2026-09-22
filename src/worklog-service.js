@@ -2,6 +2,7 @@ import { FeishuClient } from "./feishu.js";
 import { requireConfig } from "./env.js";
 import { JiraClient } from "./jira.js";
 import { StateStore } from "./state.js";
+import { withSyncWriteGuard } from "./sync-guard.js";
 import { syncTableRows, validateDate } from "./service.js";
 import {
   transformWorklogs,
@@ -48,6 +49,19 @@ function recordDay(value, timezoneOffset) {
     .slice(0, 10);
 }
 
+export function validateWorklogSchema(fieldMap, hoursField) {
+  const requiredTypes = new Map([
+    ["Jira Worklog ID", 1], ["Jira Issue ID", 1],
+    [hoursField, 2], ["有效工时数", 2],
+    ["工作日期", 5], ["Worklog 更新时间", 5], ["同步时间", 5],
+  ]);
+  for (const [name, type] of requiredTypes) {
+    if (fieldMap.get(name)?.type !== type) {
+      throw new Error(`飞书报工表字段 ${name} 必须存在且类型为${{ 1: "文本", 2: "数字", 5: "日期" }[type]}`);
+    }
+  }
+}
+
 export function createWorklogSyncService(config) {
   requireConfig(config, ["jiraBaseUrl", "jiraUsername", "jiraPassword"]);
   const jira = new JiraClient({
@@ -84,6 +98,9 @@ export function createWorklogSyncService(config) {
       "feishuAppSecret",
       "feishuWorklogTableId",
     ]);
+    if ([config.feishuTableId, config.feishuDailyTableId].includes(config.feishuWorklogTableId)) {
+      throw new Error("报工表不能与派工基础表或日粒度表相同");
+    }
     const dates = rangeDates(from, to);
     const result = await preview(from, to);
     if (config.strictWorklogGovernance && result.errors.length) {
@@ -105,10 +122,16 @@ export function createWorklogSyncService(config) {
       timezoneOffset: config.timezoneOffset,
     });
     const fieldMap = await feishu.listFields();
-    const missingFields = WORKLOG_EXPECTED_FIELDS.filter((name) => !fieldMap.has(name));
+    const hoursField = config.feishuWorklogHoursField || "工时";
+    if (hoursField !== "工时" && WORKLOG_EXPECTED_FIELDS.includes(hoursField)) {
+      throw new Error("FEISHU_WORKLOG_HOURS_FIELD 不能与其他报工字段重名");
+    }
+    const expectedFields = WORKLOG_EXPECTED_FIELDS.map((name) => name === "工时" ? hoursField : name);
+    const missingFields = expectedFields.filter((name) => !fieldMap.has(name));
     if (config.strictFieldCheck && missingFields.length) {
       throw new Error(`飞书报工表缺少字段：${missingFields.join(", ")}`);
     }
+    validateWorklogSchema(fieldMap, hoursField);
 
     const appToken = await feishu.resolveAppToken();
     const existingRecords = await feishu.listRecords();
@@ -143,19 +166,27 @@ export function createWorklogSyncService(config) {
         day: recordDay(record.fields?.["工作日期"], config.timezoneOffset),
       };
     }
-    await state.save();
+    if (duplicateExistingWorklogIds.length) {
+      throw new Error(`飞书报工表存在重复 Jira Worklog ID，已停止写入：${duplicateExistingWorklogIds.slice(0, 3).map((item) => item.worklogId).join(", ")}`);
+    }
 
     const rowsByDay = new Map(dates.map((date) => [date, []]));
-    for (const row of result.data) rowsByDay.get(row.sourceDay)?.push(row);
+    for (const row of result.data) {
+      const { 工时: hours, ...fields } = row.fields;
+      rowsByDay.get(row.sourceDay)?.push({ ...row, fields: { ...fields, [hoursField]: hours } });
+      // 跨日改期时不要在处理旧日期时删除稍后仍需更新的记录。
+      const known = tableState.records[row.sourceKey];
+      if (known) known.day = row.sourceDay;
+    }
     const perDay = [];
     for (const date of dates) {
       const tableResult = await syncTableRows({
         feishu,
         rows: rowsByDay.get(date),
-        expectedFields: WORKLOG_EXPECTED_FIELDS,
+        expectedFields,
         state,
         date,
-        deleteMissing: config.worklogDeleteMissing,
+        deleteMissing: config.worklogDeleteMissing && result.errors.length === 0,
         strictFieldCheck: config.strictFieldCheck,
         tableLabel: "报工表",
       });
@@ -186,5 +217,5 @@ export function createWorklogSyncService(config) {
     };
   }
 
-  return { preview, sync };
+  return { preview, sync: (from, to) => withSyncWriteGuard(config, () => sync(from, to)) };
 }

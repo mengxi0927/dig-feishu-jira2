@@ -7,11 +7,14 @@ function argument(name) {
 }
 
 const command = process.argv[2] || "preview";
-const date = argument("--date") || new Date().toISOString().slice(0, 10);
+const date = argument("--date") || new Date(Date.now() + 8 * 3600000 - 86400000).toISOString().slice(0, 10);
 
 try {
   const service = createSyncService(getConfig());
-  const result = command === "sync" ? await service.sync(date) : await service.preview(date);
+  if (!["preview", "sync", "initialize"].includes(command)) throw new Error("命令必须为 preview、sync 或 initialize");
+  const result = command === "initialize"
+    ? await service.initialize(date, argument("--baseline-hash"))
+    : command === "sync" ? await service.sync(date) : await service.preview(date);
   console.log(JSON.stringify(result, null, 2));
 } catch (error) {
   console.error(error.message);

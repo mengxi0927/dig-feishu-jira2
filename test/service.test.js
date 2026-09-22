@@ -148,7 +148,8 @@ test("preview returns both the raw rows and governed daily rows", async () => {
   }
 });
 
-test("sync writes the raw and governed rows to separate Feishu tables", async () => {
+for (const hoursField of ["工时", "工时（小时）"]) {
+test(`sync writes both tables using daily hours field ${hoursField}`, async () => {
   const originalFetch = global.fetch;
   const temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "jira-feishu-sync-"));
   const writes = [];
@@ -217,7 +218,7 @@ test("sync writes the raw and governed rows to separate Feishu tables", async ()
         code: 0,
         data: {
           items: DAILY_EXPECTED_FIELDS.map((fieldName) => ({
-            field_name: fieldName,
+            field_name: fieldName === "工时" ? hoursField : fieldName,
             type: fieldName === "日期" ? 5 : fieldName === "工时" ? 2 : 1,
           })),
           has_more: false,
@@ -249,8 +250,11 @@ test("sync writes the raw and governed rows to separate Feishu tables", async ()
       feishuWikiNodeToken: "",
       feishuTableId: "raw-table",
       feishuDailyTableId: "daily-table",
+      feishuDailyHoursField: hoursField,
       timezoneOffset: "+08:00",
       stateFile: path.join(temporaryDirectory, "sync-state.json"),
+      syncWriteEnabled: true,
+      syncAllowedHostname: os.hostname(),
       strictFieldCheck: true,
       strictDailyGovernance: true,
       deleteMissing: false,
@@ -265,7 +269,7 @@ test("sync writes the raw and governed rows to separate Feishu tables", async ()
       "日期": Date.parse("2026-09-17T00:00:00+08:00"),
       "姓名": "执行人",
       "项目号": "DIG",
-      "工时": 1,
+      [hoursField]: 1,
     });
 
     const state = JSON.parse(await fs.readFile(path.join(temporaryDirectory, "sync-state.json"), "utf8"));
@@ -276,3 +280,4 @@ test("sync writes the raw and governed rows to separate Feishu tables", async ()
     await fs.rm(temporaryDirectory, { recursive: true, force: true });
   }
 });
+}

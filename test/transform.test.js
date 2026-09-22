@@ -4,6 +4,7 @@ import { dailySourceKey, transformDailyPlans, transformPlans } from "../src/tran
 import { validateDate } from "../src/service.js";
 
 const fakeJira = {
+  baseUrl: "https://jira.example",
   async getProjectNames() {
     return new Map([["DIG", "DIG 项目"]]);
   },
@@ -12,10 +13,11 @@ const fakeJira = {
   },
 };
 
-test("maps Tempo plan to the 23-column Feishu structure", async () => {
+test("maps Tempo plan including the four additional Feishu fields", async () => {
   const rows = await transformPlans([
     {
       allocationId: 100,
+      planItemType: "ISSUE",
       assignee: "assignee1",
       day: "2026-09-17",
       planCreator: "creator1",
@@ -40,6 +42,21 @@ test("maps Tempo plan to the 23-column Feishu structure", async () => {
   assert.equal(rows[0].fields["Planned hours total"], 8);
   assert.equal(rows[0].fields["Assignee (Full name)"], "执行人");
   assert.equal(rows[0].fields["Location Name"], "上海");
+  assert.equal(rows[0].fields["Sync status"], "已同步");
+  assert.equal(rows[0].fields.Source, "Jira Tempo Planning");
+  assert.equal(rows[0].fields["Jira Tempo PlanningIssue URL"], "https://jira.example/browse/DIG-1");
+  assert.equal(rows[0].fields["Jira IssuePlan item type"], "ISSUE");
+});
+
+test("does not invent item types or issue URLs for project plans", async () => {
+  const rows = await transformPlans([
+    { allocationId: 1, day: "2026-09-17", planItemType: "PROJECT", planItemInfo: { key: "DIG" } },
+    { allocationId: 2, day: "2026-09-17", planItemInfo: {} },
+  ], fakeJira);
+  assert.equal(rows[0].fields["Jira IssuePlan item type"], "PROJECT");
+  assert.equal(rows[0].fields["Jira Tempo PlanningIssue URL"], "");
+  assert.equal(rows[1].fields["Jira IssuePlan item type"], "");
+  assert.equal(rows[1].fields["Jira Tempo PlanningIssue URL"], "");
 });
 
 test("deduplicates by allocationId plus day", async () => {

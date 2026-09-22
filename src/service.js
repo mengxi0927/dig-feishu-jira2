@@ -2,6 +2,8 @@ import { FeishuClient } from "./feishu.js";
 import { requireConfig } from "./env.js";
 import { JiraClient } from "./jira.js";
 import { StateStore } from "./state.js";
+import { withSyncWriteGuard } from "./sync-guard.js";
+import { createAssignmentService } from "./assignment-service.js";
 import {
   DAILY_EXPECTED_FIELDS,
   EXPECTED_FIELDS,
@@ -117,6 +119,8 @@ export async function syncTableRows({
 
 export function createSyncService(config) {
   requireConfig(config, ["jiraBaseUrl", "jiraUsername", "jiraPassword"]);
+  if (config.assignmentStrategy === "monthly-delta") return createAssignmentService(config);
+  if (config.assignmentStrategy && config.assignmentStrategy !== "legacy") throw new Error("未知 ASSIGNMENT_STRATEGY");
   const jira = new JiraClient({
     baseUrl: config.jiraBaseUrl,
     username: config.jiraUsername,
@@ -164,6 +168,15 @@ export function createSyncService(config) {
 
     const rawFeishu = createFeishuClient(config, config.feishuTableId);
     const dailyFeishu = createFeishuClient(config, config.feishuDailyTableId);
+    const hoursField = config.feishuDailyHoursField || "工时";
+    if (["日期", "姓名", "项目号"].includes(hoursField)) {
+      throw new Error("FEISHU_DAILY_HOURS_FIELD 不能与日粒度主键字段重名");
+    }
+    const dailyExpectedFields = DAILY_EXPECTED_FIELDS.map((name) => name === "工时" ? hoursField : name);
+    const dailyRows = result.daily.data.map((row) => {
+      const { 工时: hours, ...fields } = row.fields;
+      return { ...row, fields: { ...fields, [hoursField]: hours } };
+    });
     // Validate both schemas before either table is mutated.
     await validateTableFields(
       rawFeishu,
@@ -173,7 +186,7 @@ export function createSyncService(config) {
     );
     await validateTableFields(
       dailyFeishu,
-      DAILY_EXPECTED_FIELDS,
+      dailyExpectedFields,
       config.strictFieldCheck,
       "日粒度表",
     );
@@ -193,8 +206,8 @@ export function createSyncService(config) {
 
     const dailyTable = await syncTableRows({
       feishu: dailyFeishu,
-      rows: result.daily.data,
-      expectedFields: DAILY_EXPECTED_FIELDS,
+      rows: dailyRows,
+      expectedFields: dailyExpectedFields,
       state,
       date,
       deleteMissing: config.dailyDeleteMissing,
@@ -226,5 +239,5 @@ export function createSyncService(config) {
     };
   }
 
-  return { preview, sync };
+  return { preview, sync: (date) => withSyncWriteGuard(config, () => sync(date)) };
 }

@@ -22,6 +22,10 @@ export const EXPECTED_FIELDS = [
   "Approved by (Account ID)",
   "Approval date and time",
   "Location Name",
+  "Sync status",
+  "Source",
+  "Jira Tempo PlanningIssue URL",
+  "Jira IssuePlan item type",
 ];
 
 export const DAILY_EXPECTED_FIELDS = ["日期", "姓名", "项目号", "工时"];
@@ -106,6 +110,12 @@ export async function transformPlans(plans, jiraClient) {
     const projectKey = info.projectKey || "";
     const assigneeId = identifier(plan.assignee);
     const creatorId = identifier(plan.planCreator);
+    const itemType = plan.planItemType || "";
+    const issueKey = String(info.key || "").trim();
+    const isIssue = itemType ? String(itemType).toUpperCase() === "ISSUE" : /^.+-\d+$/.test(issueKey);
+    const issueUrl = isIssue && issueKey && jiraClient.baseUrl
+      ? `${jiraClient.baseUrl.replace(/\/$/, "")}/browse/${encodeURIComponent(issueKey)}`
+      : "";
     transformed.push({
       sourceKey,
       sourceDay: plan.day,
@@ -133,6 +143,10 @@ export async function transformPlans(plans, jiraClient) {
         "Approved by (Account ID)": "",
         "Approval date and time": "",
         "Location Name": locationName(plan.location),
+        "Sync status": "已同步",
+        Source: "Jira Tempo Planning",
+        "Jira Tempo PlanningIssue URL": issueUrl,
+        "Jira IssuePlan item type": itemType,
       },
     });
   }
@@ -145,7 +159,7 @@ export async function transformPlans(plans, jiraClient) {
  * into one row. timePlannedSeconds is the authoritative daily amount; older
  * Tempo responses that omit it fall back to secondsPerDay.
  */
-export async function transformDailyPlans(plans, jiraClient) {
+export async function transformDailyPlans(plans, jiraClient, { includeAllocationIds = false } = {}) {
   const assigneeIds = [...new Set(plans.map((plan) => identifier(plan.assignee)).filter(Boolean))];
   const displayNames = new Map();
   for (const accountId of assigneeIds) {
@@ -214,8 +228,10 @@ export async function transformDailyPlans(plans, jiraClient) {
       project,
       assigneeName,
       seconds: 0,
+      allocationIds: new Set(),
     };
     group.seconds += plannedSeconds;
+    if (allocationId) group.allocationIds.add(allocationId);
     groups.set(sourceKey, group);
     acceptedPlans += 1;
     acceptedSeconds += plannedSeconds;
@@ -230,6 +246,7 @@ export async function transformDailyPlans(plans, jiraClient) {
         "姓名": group.assigneeName,
         "项目号": group.project,
         "工时": roundHours(group.seconds / 3600),
+        ...(includeAllocationIds ? { allocationId: [...group.allocationIds].sort().join(",") } : {}),
       },
     }))
     .sort((left, right) => (

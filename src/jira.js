@@ -77,9 +77,13 @@ export class JiraClient {
       const response = await this.request(`/rest/api/2/search?${query.toString()}`, {
         timeoutMs: 60000,
       });
-      const batch = Array.isArray(response?.issues) ? response.issues : [];
+      if (!Array.isArray(response?.issues) || !Number.isInteger(response.total) || response.total < 0) {
+        throw new Error("Jira Issue 搜索响应不完整，停止同步");
+      }
+      const batch = response.issues;
       total = Number(response?.total) || batch.length;
       issues.push(...batch);
+      if (!batch.length && startAt < total) throw new Error("Jira Issue 分页提前结束，停止同步");
       if (!batch.length) break;
       startAt += batch.length;
     } while (startAt < total);
@@ -99,9 +103,13 @@ export class JiraClient {
         `/rest/api/2/issue/${encodeURIComponent(issueKey)}/worklog?${query.toString()}`,
         { timeoutMs: 60000 },
       );
-      const batch = Array.isArray(response?.worklogs) ? response.worklogs : [];
+      if (!Array.isArray(response?.worklogs) || !Number.isInteger(response.total) || response.total < 0) {
+        throw new Error("Jira Worklog 响应不完整，停止同步");
+      }
+      const batch = response.worklogs;
       total = Number(response?.total) || batch.length;
       worklogs.push(...batch);
+      if (!batch.length && startAt < total) throw new Error("Jira Worklog 分页提前结束，停止同步");
       if (!batch.length) break;
       startAt += batch.length;
     } while (startAt < total);
@@ -137,8 +145,9 @@ export class JiraClient {
       async (issue) => {
         const embedded = issue.fields?.worklog || {};
         const embeddedRows = Array.isArray(embedded.worklogs) ? embedded.worklogs : [];
-        const total = Number(embedded.total) || embeddedRows.length;
-        if (embeddedRows.length >= total) return embeddedRows;
+        const total = embedded.total;
+        if (Array.isArray(embedded.worklogs) && Number.isInteger(total)
+          && total >= 0 && embeddedRows.length === total && !embedded.startAt) return embeddedRows;
         return this.fetchIssueWorklogs(issue.key, options.pageSize || 100);
       },
     );
@@ -162,16 +171,20 @@ export class JiraClient {
   }
 
   async fetchPlanAllocationsForDate(date) {
-    const dailyPlans = await this.fetchPlans(date);
+    return this.fetchPlanAllocationsRange(date, date);
+  }
+
+  async fetchPlanAllocationsRange(queryFrom, queryTo) {
+    const dailyPlans = await this.fetchPlansRange(queryFrom, queryTo);
     if (!dailyPlans.length) return [];
 
-    const starts = dailyPlans.map((plan) => plan.planStart || date).sort();
-    const ends = dailyPlans.map((plan) => plan.planEnd || date).sort();
+    const starts = dailyPlans.map((plan) => plan.planStart || queryFrom).sort();
+    const ends = dailyPlans.map((plan) => plan.planEnd || queryTo).sort();
     const from = starts[0];
     const to = ends[ends.length - 1];
     const taskKey = [...new Set(dailyPlans.map((plan) => plan.planItemInfo?.key).filter(Boolean))];
     const filters = taskKey.length ? { taskKey } : {};
-    const spanPlans = from === date && to === date
+    const spanPlans = from === queryFrom && to === queryTo
       ? dailyPlans
       : await this.fetchPlansRange(from, to, filters);
 

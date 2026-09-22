@@ -90,6 +90,45 @@ export class FeishuClient {
     return records;
   }
 
+  async listTables() {
+    const token = await this.resolveAppToken();
+    const tables = [];
+    let page = "";
+    do {
+      const query = new URLSearchParams({ page_size: "100", ...(page ? { page_token: page } : {}) });
+      const data = assertFeishuSuccess(await this.request(`/bitable/v1/apps/${token}/tables?${query}`), "读取数据表");
+      tables.push(...(data?.items || []));
+      if (data?.has_more && (!data.page_token || data.page_token === page)) throw new Error("数据表分页不完整");
+      page = data?.has_more ? data.page_token : "";
+    } while (page);
+    return tables;
+  }
+
+  async createTable(name, fields) {
+    const token = await this.resolveAppToken();
+    return assertFeishuSuccess(await this.request(`/bitable/v1/apps/${token}/tables`, {
+      method: "POST", body: JSON.stringify({ table: { name, fields } }),
+    }), "创建数据表");
+  }
+
+  async createField(field) {
+    const token = await this.resolveAppToken();
+    const data = assertFeishuSuccess(await this.request(`/bitable/v1/apps/${token}/tables/${this.tableId}/fields`, {
+      method: "POST", body: JSON.stringify(field),
+    }), "创建字段");
+    this.fieldMap = null;
+    return data?.field;
+  }
+
+  async updateField(fieldId, field) {
+    const token = await this.resolveAppToken();
+    const response = await this.request(`/bitable/v1/apps/${token}/tables/${this.tableId}/fields/${fieldId}`, {
+      method: "PUT", body: JSON.stringify(field),
+    });
+    if (response?.code === 1254606 && response?.msg === "DataNotChange") return response.data;
+    return assertFeishuSuccess(response, "更新字段");
+  }
+
   dateToTimestamp(value, fieldName, allFields) {
     if (typeof value === "number") return value;
     if (!value) return value;
@@ -114,6 +153,8 @@ export class FeishuClient {
       if (!schema) continue;
       if (schema.type === 5) {
         result[fieldName] = this.dateToTimestamp(value, fieldName, fields);
+      } else if (schema.type === 15) {
+        result[fieldName] = typeof value === "string" ? { text: value, link: value } : value;
       } else if (schema.type === 2) {
         const number = Number(value);
         if (!Number.isFinite(number)) throw new Error(`字段 ${fieldName} 不是有效数字：${value}`);

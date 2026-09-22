@@ -91,7 +91,7 @@ export function worklogSourceKey(worklogId) {
 export function transformWorklogs(entries, options = {}) {
   const errors = [];
   const rows = [];
-  const seen = new Set();
+  const seen = new Map();
   let duplicateWorklogs = 0;
   let totalSeconds = 0;
   const syncTimestamp = options.syncTimestamp || Date.now();
@@ -127,9 +127,12 @@ export function transformWorklogs(entries, options = {}) {
 
     if (seen.has(worklogId)) {
       duplicateWorklogs += 1;
+      if (seen.get(worklogId) !== JSON.stringify(entry)) {
+        errors.push({ sourceIndex: index + 1, worklogId, issueKey, codes: ["CONFLICTING_WORKLOG_ID"] });
+      }
       continue;
     }
-    seen.add(worklogId);
+    seen.set(worklogId, JSON.stringify(entry));
 
     const components = Array.isArray(issueFields.components) ? issueFields.components : [];
     const versions = Array.isArray(issueFields.fixVersions) ? issueFields.fixVersions : [];

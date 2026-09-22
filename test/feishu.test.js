@@ -2,6 +2,28 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { FeishuClient } from "../src/feishu.js";
 
+test("serializes the new metadata for text, single-select and hyperlink columns", () => {
+  const client = new FeishuClient({});
+  client.fieldMap = new Map([
+    ["Sync status", { type: 3 }],
+    ["Source", { type: 1 }],
+    ["Jira Tempo PlanningIssue URL", { type: 15 }],
+    ["Jira IssuePlan item type", { type: 1 }],
+  ]);
+  const fields = {
+    "Sync status": "已同步",
+    Source: "Jira Tempo Planning",
+    "Jira Tempo PlanningIssue URL": "https://jira.example/browse/DIG-1",
+    "Jira IssuePlan item type": "ISSUE",
+  };
+  assert.deepEqual(client.serializeFields(fields), {
+    ...fields,
+    "Jira Tempo PlanningIssue URL": { text: fields["Jira Tempo PlanningIssue URL"], link: fields["Jira Tempo PlanningIssue URL"] },
+  });
+  client.fieldMap.set("Jira Tempo PlanningIssue URL", { type: 1 });
+  assert.deepEqual(client.serializeFields(fields), fields);
+});
+
 test("serializes date, time, number and text fields using Feishu field types", () => {
   const client = new FeishuClient({ timezoneOffset: "+08:00" });
   client.fieldMap = new Map([
