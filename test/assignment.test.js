@@ -33,8 +33,8 @@ test("allocation metadata does not change existing aggregation or rounded hours"
   const plans = [plan(11, "2026-09-01", 1.25), plan(12, "2026-09-01", 3.5), plan(11, "2026-09-01", 1.25)];
   const old = await transformDailyPlans(plans, jiraBase);
   const enriched = await transformDailyPlans(plans, jiraBase, { includeAllocationIds: true });
-  assert.equal(enriched.rows[0].fields.allocationId, "11,12");
-  delete enriched.rows[0].fields.allocationId;
+  assert.equal(enriched.rows[0].fields["派工识别id"], "11|2026-09-01,12|2026-09-01");
+  delete enriched.rows[0].fields["派工识别id"];
   assert.deepEqual(enriched, old);
 });
 
@@ -89,7 +89,7 @@ async function fixture(t) {
   let plans = [plan(1, "2026-08-10", 5), plan(2, "2026-09-18", 2)];
   let n = 0;
   const tables = new Map();
-  const fields = ["项目号", "姓名", "allocationId"].map(field_name => ({ field_name, type: 1 }));
+  const fields = ["项目号", "姓名", "allocationId", "派工识别id"].map(field_name => ({ field_name, type: 1 }));
   fields.push({ field_name: "日期", type: 5 }, { field_name: "工时（小时）", type: 2 }, { field_name: "补录工时（小时）", type: 2 });
   for (const [id, name] of [["raw", "派工日志"], ["normal", "工时信息"], ["template", "工时信息-补录-9月"]]) tables.set(id, {
     name, fields: new Map(fields.map(f => [f.field_name, { ...f, field_id: `fld${++n}` }])), records: [],
@@ -173,7 +173,7 @@ test("lost log create response recovers without duplicate event and normal delet
   assert.equal(f.tables.get("raw").records.length,count);
   const normal = f.tables.get("normal").records.find(r=>r.fields["日期"]==="2026-09-18");
   assert.equal(normal.fields["工时（小时）"],3);
-  assert.equal(normal.fields.allocationId,"3");
+  assert.equal(normal.fields["派工识别id"],"3|2026-09-18");
   assert.ok(f.calls.some(([from])=>from==="2026-01-01"));
 });
 

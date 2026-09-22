@@ -30,9 +30,10 @@ export const EXPECTED_FIELDS = [
   "dateUpdated",
   "派工状态",
   "allocationId",
+  "派工识别id",
 ];
 
-export const DAILY_EXPECTED_FIELDS = ["日期", "姓名", "项目号", "工时", "allocationId"];
+export const DAILY_EXPECTED_FIELDS = ["日期", "姓名", "项目号", "工时", "派工识别id"];
 
 function hours(seconds) {
   if (seconds == null || Number.isNaN(Number(seconds))) return "";
@@ -154,6 +155,7 @@ export async function transformPlans(plans, jiraClient) {
         dateCreated: plan.dateCreated || "",
         dateUpdated: plan.dateUpdated || "",
         allocationId: identifier(plan.allocationId),
+        "派工识别id": sourceKey,
       },
     });
   }
@@ -253,7 +255,7 @@ export async function transformDailyPlans(plans, jiraClient, { includeAllocation
         "姓名": group.assigneeName,
         "项目号": group.project,
         "工时": roundHours(group.seconds / 3600),
-        ...(includeAllocationIds ? { allocationId: [...group.allocationIds].sort().join(",") } : {}),
+        ...(includeAllocationIds ? { "派工识别id": [...group.allocationIds].sort().map(id => `${id}|${group.day}`).join(",") } : {}),
       },
     }))
     .sort((left, right) => (

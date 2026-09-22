@@ -83,7 +83,7 @@ export function adjustmentRows(accounted, latest, beforeDay, yearStart, revision
       if (Math.abs(leg.seconds) < 1e-8) continue;
       rows.push({ key: digest([revision, key, group, old?.daily ?? null, fresh?.daily ?? null]), fields: {
         "项目号": leg.fields["项目号"], "姓名": leg.fields["姓名"], "日期": date,
-        allocationId: String((fresh || old).plan.allocationId),
+        "派工识别id": key,
         "补录工时（小时）": Math.round(leg.seconds / 3600 * 10000) / 10000,
       } });
     }

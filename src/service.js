@@ -72,7 +72,9 @@ export async function syncTableRows({
     const provenance = {};
     const outputFields = { ...row.fields };
     if (trackAssignmentChanges) {
-      provenance.assignmentFingerprint = createHash("sha256").update(JSON.stringify(row.fields)).digest("hex");
+      // Derived provenance is not a Jira business change; adding this column must not mark rows modified.
+      const { "派工识别id": recognitionId, ...businessFields } = row.fields;
+      provenance.assignmentFingerprint = createHash("sha256").update(JSON.stringify(businessFields)).digest("hex");
       provenance.assignmentStatus = known?.assignmentFingerprint
         ? (known.assignmentFingerprint === provenance.assignmentFingerprint ? known.assignmentStatus : "修改")
         : "新增";

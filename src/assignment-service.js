@@ -7,10 +7,10 @@ import { adjustmentRows, changes, digest, periodStart, replaceRange, scheduleRan
 import { appendOnce, cloneSchema, ensureFields, textValue } from "./assignment-tables.js";
 
 const textField = field_name => ({ field_name, type: 1 });
-const LOG_FIELDS = [textField("allocationId"), textField("变更事件ID"), textField("来源唯一键"),
+const LOG_FIELDS = [textField("allocationId"), textField("派工识别id"), textField("变更事件ID"), textField("来源唯一键"),
   { field_name: "工时日期", type: 5 }, { field_name: "变更前工时", type: 2 }, { field_name: "变更后工时", type: 2 },
   { field_name: "派工状态", type: 3, property: { options: ["新增", "修改", "删除"].map(name => ({ name })) } }];
-const BACKFILL_FIELDS = [textField("项目号"), textField("姓名"), textField("allocationId"), textField("同步明细键"),
+const BACKFILL_FIELDS = [textField("项目号"), textField("姓名"), textField("派工识别id"), textField("同步明细键"),
   textField("调整期间"), { field_name: "日期", type: 5 }, { field_name: "补录工时（小时）", type: 2 }];
 
 function recordDay(value) {
@@ -40,7 +40,7 @@ export function createAssignmentService(config, dependencies = {}) {
   const store = () => new StateStore(config.stateFile).load();
   const hoursField = config.feishuDailyHoursField || "工时（小时）";
   const templateId = config.feishuBackfillTemplateTableId;
-  const normalFields = [textField("项目号"), textField("姓名"), textField("allocationId"),
+  const normalFields = [textField("项目号"), textField("姓名"), textField("派工识别id"),
     { field_name: "日期", type: 5 }, { field_name: hoursField, type: 2 }];
   function validateConfiguration() {
     if (!config.feishuTableId || !config.feishuDailyTableId || !templateId) throw new Error("缺少派工、工时或补录模板表 ID");
@@ -123,7 +123,7 @@ export function createAssignmentService(config, dependencies = {}) {
       const provenance = await transformDailyPlans(Object.values(proposal.latest).map(x => x.plan), jira, { includeAllocationIds: true });
       const ids = new Map(review.records.map(row => [row.key, row.recordId]));
       await client(config.feishuDailyTableId).batchUpdate(provenance.rows.map(row => ({
-        recordId: ids.get(row.sourceKey), fields: { allocationId: row.fields.allocationId },
+        recordId: ids.get(row.sourceKey), fields: { "派工识别id": row.fields["派工识别id"] },
       })));
       const app = await client(config.feishuDailyTableId).resolveAppToken();
       const mapping = state.table(app, config.feishuDailyTableId);
@@ -202,7 +202,7 @@ export function createAssignmentService(config, dependencies = {}) {
     const after = normalIndex(await target.listRecords());
     for (const row of proposal.daily.rows) {
       const record = after.get(row.sourceKey);
-      if (!record || Number(record.fields[hoursField]) !== row.fields["工时"] || textValue(record.fields.allocationId) !== row.fields.allocationId) throw new Error("正常工时回读校验失败");
+      if (!record || Number(record.fields[hoursField]) !== row.fields["工时"] || textValue(record.fields["派工识别id"]) !== row.fields["派工识别id"]) throw new Error("正常工时回读校验失败");
       mapping.records[row.sourceKey] = { recordId: record.record_id, day: row.sourceDay };
     }
     for (const [key, known] of Object.entries(mapping.records)) if (known.day >= proposal.range.openFrom && known.day <= proposal.range.cutoff && !desired.has(key)) {

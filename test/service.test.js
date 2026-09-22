@@ -272,7 +272,7 @@ test(`sync writes both tables using daily hours field ${hoursField}`, async () =
       "姓名": "执行人",
       "项目号": "DIG",
       [hoursField]: 1,
-      allocationId: "300",
+      "派工识别id": "300|2026-09-17",
     });
 
     const state = JSON.parse(await fs.readFile(path.join(temporaryDirectory, "sync-state.json"), "utf8"));
