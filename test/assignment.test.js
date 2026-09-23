@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createAssignmentService } from "../src/assignment-service.js";
-import { adjustmentRows, changes, periodStart, scheduleRange, snapshotPlans } from "../src/assignment-model.js";
+import { classifyHistoricalPlans, allocationEntryDay, adjustmentRows, changes, periodStart, scheduleRange, snapshotPlans } from "../src/assignment-model.js";
 import { cloneDefinition } from "../src/assignment-tables.js";
 import { transformDailyPlans } from "../src/transform.js";
 import { JiraClient } from "../src/jira.js";
@@ -61,7 +61,7 @@ test("calendar includes all 31 days of closing period, catches missed 22nd and k
   assert.equal(scheduleRange("2026-09-20", state).monthly, false);
   assert.equal(scheduleRange("2026-09-21", state).monthly, true);
   assert.equal(scheduleRange("2026-09-22", state).monthly, true);
-  assert.equal(scheduleRange("2026-09-21", state).openFrom, "2026-08-22");
+  assert.equal(scheduleRange("2026-09-21", state).openFrom, "2026-09-22");
   assert.equal(scheduleRange("2026-09-22", { ...state, closedThrough: "2026-09-21" }).from, "2026-08-24");
 });
 
@@ -189,7 +189,7 @@ test("initialization blocks unknown history and a stale baseline approval", asyn
   assert.equal(f.tables.get("template").records.length,0);
 });
 
-test("month's observed changes in daily window are not consumed before monthly accounting", async t => {
+test("closed-period changes are posted immediately and subsequent changes use the accounted balance", async t => {
   const f = await fixture(t);
   f.setPlans([plan(1,"2026-08-21",5),plan(2,"2026-09-18",2)]);
   f.tables.get("normal").records.find(r=>r.fields["日期"]==="2026-08-10").fields["日期"]="2026-08-21";
@@ -198,9 +198,118 @@ test("month's observed changes in daily window are not consumed before monthly a
   await f.service.sync("2026-09-19");
   const a = (await f.state()).assignment;
   assert.equal(a.observed["1|2026-08-21"].daily.fields["工时"],8);
-  assert.equal(a.accounted["1|2026-08-21"].daily.fields["工时"],5);
+  assert.equal(a.accounted["1|2026-08-21"].daily.fields["工时"],8);
   f.setDate("2026-09-22");
   f.setPlans([plan(1,"2026-08-21",6),plan(2,"2026-09-18",2)]);
   await f.service.sync("2026-09-21");
-  assert.equal(f.tables.get("template").records[0].fields["补录工时（小时）"],1);
+  assert.deepEqual(f.tables.get("template").records.map(r => r.fields["补录工时（小时）"]), [3, -2]);
+});
+
+
+test("September 23 locks September 21 even when the closing job was missed", async t => {
+  const f = await fixture(t); await f.init();
+  f.setDate("2026-09-23");
+  f.setPlans([plan(1,"2026-08-10",5), plan(2,"2026-09-18",8), plan(3,"2026-09-21",5), plan(4,"2026-09-22",7)]);
+  await f.service.sync("2026-09-22");
+  const normal = f.tables.get("normal").records;
+  assert.equal(normal.find(r => r.fields["日期"] === "2026-09-18").fields["工时（小时）"], 2);
+  assert.equal(normal.some(r => r.fields["日期"] === "2026-09-21"), false);
+  assert.equal(normal.find(r => r.fields["日期"] === "2026-09-22").fields["工时（小时）"], 7);
+  assert.deepEqual(f.tables.get("template").records.map(r => r.fields["补录工时（小时）"]), [6,5]);
+  await f.service.sync("2026-09-22");
+  assert.equal(f.tables.get("template").records.length, 2);
+  f.setPlans([plan(1,"2026-08-10",5), plan(2,"2026-09-18",5), plan(4,"2026-09-22",3)]);
+  await f.service.sync("2026-09-22");
+  assert.deepEqual(f.tables.get("template").records.map(r => r.fields["补录工时（小时）"]), [6,5,-3,-5]);
+  assert.equal(f.tables.get("normal").records.find(r => r.fields["日期"] === "2026-09-22").fields["工时（小时）"], 3);
+});
+
+test("an interrupted pre-close batch cannot overwrite frozen normal hours after close", async t => {
+  const f = await fixture(t); await f.init();
+  f.setDate("2026-09-21");
+  f.setPlans([plan(1,"2026-08-10",5), plan(2,"2026-09-18",8)]);
+  f.fail("raw");
+  await assert.rejects(f.service.sync("2026-09-20"), /response lost/);
+  f.setDate("2026-09-23");
+  await assert.rejects(f.service.sync("2026-09-22"), /跨越财务锁期/);
+  assert.equal(f.tables.get("normal").records.find(r => r.fields["日期"] === "2026-09-18").fields["工时（小时）"], 2);
+});
+
+
+test("full scans and daily windows exclude prior-year backfills", () => {
+  assert.equal(scheduleRange("2027-01-02", undefined).from, "2027-01-01");
+  const state = { initialized: true, closedThrough: "2026-12-21", observed: {
+    "1|2026-09-21": { plan: plan(1, "2026-09-21", 5) },
+  } };
+  const range = scheduleRange("2027-01-21", state);
+  assert.equal(range.openFrom, "2027-01-22");
+  assert.equal(range.from, "2027-01-01");
+});
+
+
+test("backfill entry date is Jira creation day, including deletion, never work/update/sync day", async () => {
+  const old = await snapshotPlans([{...plan(1,"2026-09-21",5),dateCreated:"2026-09-22",dateUpdated:"2026-09-23"}], jiraBase);
+  const changed = await snapshotPlans([{...plan(1,"2026-09-21",8),dateCreated:"2026-09-22",dateUpdated:"2026-09-24"}], jiraBase);
+  for(const [before,after] of [[{},old],[old,changed],[old,{}]]) {
+    assert.equal(adjustmentRows(before,after,"2026-09-22","2026-01-01",1)[0].fields["派工录入日期"],"2026-09-22");
+  }
+  assert.equal(allocationEntryDay({dateCreated:"2026-09-21T18:00:00Z"}),"2026-09-22");
+  assert.equal(allocationEntryDay({dateUpdated:"2026-09-23"}),undefined);
+  assert.equal(allocationEntryDay({dateCreated:"2026-02-30"}),undefined);
+  assert.equal(allocationEntryDay({dateCreated:"2026-09-22T10:00:00"}),undefined);
+});
+
+
+test("historical routing uses the creation period, excludes last year and flags uncertain modifications", () => {
+  const rows=[
+    {...plan(1,"2026-09-21",5),dateCreated:"2026-09-22"},
+    {...plan(2,"2026-09-22",5),dateCreated:"2026-09-23"},
+    {...plan(3,"2026-09-21",5),dateCreated:"2026-09-21",dateUpdated:"2026-09-23"},
+    {...plan(4,"2026-10-01",5),dateCreated:"2026-09-01"},
+    {...plan(5,"2025-12-21",5),dateCreated:"2026-01-01"},
+    {...plan(6,"2026-01-21",5),dateCreated:"2026-01-22"},
+  ];
+  const result=classifyHistoricalPlans(rows,2026);
+  assert.deepEqual(result.late.map(p=>p.allocationId),[1,6]);
+  assert.deepEqual(result.normal.map(p=>p.allocationId),[2,3,4]);
+  assert.deepEqual(result.modifiedAfterClose.map(p=>p.allocationId),[3]);
+  assert.throws(()=>classifyHistoricalPlans([plan(1,"2026-09-21",5)],2026),/创建日期/);
+});
+
+test("adoption reconciles classified normal/backfill balances, supports renamed work dates and never reposts history", async t => {
+  const f=await fixture(t);
+  const plans=[{...plan(1,"2026-08-10",5),dateCreated:"2026-09-01"},{...plan(2,"2026-09-18",2),dateCreated:"2026-09-18"}];
+  f.setPlans(plans);
+  const normal=f.tables.get("normal"), backfill=f.tables.get("template");
+  normal.records=normal.records.filter(r=>r.fields["日期"]!=="2026-08-10");
+  normal.records[0].fields["派工识别id"]="220260918";
+  backfill.records=[{record_id:"historical-backfill",fields:{"项目号":"DIG","姓名":"person","日期":"2026-08-10","派工识别id":"120260810","补录工时（小时）":5,"派工录入日期":"2026-09-01","同步明细键":"historical"}}];
+  for(const [name,type] of [["派工录入日期",5],["同步明细键",1]])backfill.fields.set(name,{field_name:name,type});
+  for(const table of [normal,backfill]){
+    table.fields.delete("日期");table.fields.set("派工日期",{field_name:"派工日期",type:5});
+    for(const r of table.records){r.fields["派工日期"]=r.fields["日期"];delete r.fields["日期"];}
+  }
+  await fs.writeFile(f.config.stateFile,JSON.stringify({version:1,tables:{},historicalClassification:{lateSourceKeys:["1|2026-08-10"],unresolvedModifiedKeys:[]}}));
+  backfill.records[0].fields["补录工时（小时）"]=4;
+  await assert.rejects(f.service.adoptClassifiedBaseline(plans),/补录基线内容/);
+  backfill.records[0].fields["补录工时（小时）"]=5;
+  const result=await f.service.adoptClassifiedBaseline(plans);
+  assert.equal(result.sourceDays,2);
+  assert.equal(result.backfillRows,1);
+  assert.equal(normal.fields.has("日期"),false);
+  assert.equal(backfill.fields.has("日期"),false);
+  f.setDate("2026-09-22");
+  await f.service.sync("2026-09-21");
+  assert.equal(backfill.records.length,1);
+  f.setPlans([{...plans[0],timePlannedSeconds:7*3600},plans[1]]);
+  f.setDate("2026-10-22");
+  await f.service.sync("2026-10-21");
+  const oct=[...f.tables.values()].find(t=>t.name==="工时信息-补录-10月");
+  assert.equal(oct.records.length,1);
+  assert.equal(oct.records[0].fields["补录工时（小时）"],2);
+  assert.equal(oct.records[0].fields["派工日期"],"2026-08-10");
+  assert.equal(oct.records[0].fields["派工录入日期"],"2026-09-01");
+  assert.equal(oct.fields.has("日期"),false);
+  await f.service.sync("2026-10-21");
+  assert.equal(oct.records.length,1);
 });

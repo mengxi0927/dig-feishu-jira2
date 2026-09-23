@@ -18,16 +18,19 @@ export function periodStart(date) {
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - (d.getUTCDate() < 22 ? 1 : 0), 22)).toISOString().slice(0, 10);
 }
 
-// cutoff is yesterday; on the 22nd, finalize the period ending on the 21st first.
+// Financial periods change at 00:00 Asia/Shanghai on the 22nd, independently of job success.
 export function scheduleRange(cutoff, state) {
   day(cutoff);
   const runDate = shiftDay(cutoff, 1);
   const dueEnd = shiftDay(periodStart(runDate), -1);
   const monthly = Boolean(state?.initialized && state.closedThrough < dueEnd);
   const yearStart = `${cutoff.slice(0, 4)}-01-01`;
-  const openFrom = state?.closedThrough ? shiftDay(state.closedThrough, 1) : periodStart(cutoff);
-  return { cutoff, runDate, monthly, dueEnd, openFrom, yearStart,
-    from: monthly || !state?.initialized ? yearStart : [shiftDay(cutoff, -29), openFrom].sort()[0] };
+  const openFrom = periodStart(runDate);
+  // Annual scope deliberately excludes prior-year backfills.
+  const fullFrom = yearStart;
+  const rollingFrom = [shiftDay(cutoff, -29), openFrom].sort()[0];
+  return { cutoff, runDate, monthly, dueEnd, openFrom, yearStart, fullFrom,
+    from: monthly || !state?.initialized ? fullFrom : [yearStart, rollingFrom].sort().at(-1) };
 }
 
 export async function snapshotPlans(plans, jira) {
@@ -63,6 +66,40 @@ export function changes(previous, current, revision) {
   return events;
 }
 
+// This is when the allocation was entered in Jira, not its work date or sync time.
+export function allocationEntryDay(plan) {
+  const value = plan?.dateCreated;
+  if (value == null || value === "") return undefined;
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    try { return day(value); } catch { return undefined; }
+  }
+  // Only timestamps with an explicit timezone are unambiguous.
+  if (typeof value !== "number" && !(typeof value === "string" && /T.*(?:Z|[+-]\d{2}:?\d{2})$/.test(value))) return undefined;
+  const timestamp = typeof value === "number" ? value : Date.parse(value);
+  if (!Number.isFinite(timestamp)) return undefined;
+  const date = new Date(timestamp + 8 * 3600000);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString().slice(0, 10);
+}
+
+// Historical baseline routing is based on entry time, not the date of this audit.
+// Earlier planning for a future work period is allowed; only entry after close is late.
+export function classifyHistoricalPlans(plans, year) {
+  const normal = [], late = [], modifiedAfterClose = [];
+  for (const plan of plans) {
+    day(plan.day);
+    if (!plan.day.startsWith(`${year}-`)) continue;
+    const entered = allocationEntryDay(plan);
+    if (!entered) throw new Error(`派工 ${plan.allocationId} 缺少有效创建日期，不能自动归类`);
+    if (plan.day < periodStart(entered)) late.push(plan);
+    else {
+      normal.push(plan);
+      const updated = allocationEntryDay({ dateCreated: plan.dateUpdated });
+      if (updated && plan.day < periodStart(updated)) modifiedAfterClose.push(plan);
+    }
+  }
+  return { normal, late, modifiedAfterClose };
+}
+
 // Delta per source/day and destination: moving project/person/date produces two legs.
 export function adjustmentRows(accounted, latest, beforeDay, yearStart, revision) {
   const rows = [];
@@ -85,6 +122,7 @@ export function adjustmentRows(accounted, latest, beforeDay, yearStart, revision
         "项目号": leg.fields["项目号"], "姓名": leg.fields["姓名"], "日期": date,
         "派工识别id": assignmentRecognitionId((fresh || old).plan.allocationId, date),
         "补录工时（小时）": Math.round(leg.seconds / 3600 * 10000) / 10000,
+        ...(allocationEntryDay((fresh || old).plan) ? { "派工录入日期": allocationEntryDay((fresh || old).plan) } : {}),
       } });
     }
   }

@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { getConfig } from "./env.js";
 import { createSyncService } from "./service.js";
 
@@ -11,8 +12,10 @@ const date = argument("--date") || new Date(Date.now() + 8 * 3600000 - 86400000)
 
 try {
   const service = createSyncService(getConfig());
-  if (!["preview", "sync", "initialize"].includes(command)) throw new Error("命令必须为 preview、sync 或 initialize");
-  const result = command === "initialize"
+  if (!["preview", "sync", "initialize", "adopt-classified"].includes(command)) throw new Error("命令必须为 preview、sync、initialize 或 adopt-classified");
+  const result = command === "adopt-classified"
+    ? await service.adoptClassifiedBaseline(JSON.parse(await fs.readFile(argument("--snapshot"), "utf8")).plans)
+    : command === "initialize"
     ? await service.initialize(date, argument("--baseline-hash"))
     : command === "sync" ? await service.sync(date) : await service.preview(date);
   console.log(JSON.stringify(result, null, 2));
